@@ -8,14 +8,28 @@
 
 
 import os, sys, time,torch,pickle,trimesh,itertools,pdb,zipfile,datetime,imageio,gzip,logging,joblib,importlib,uuid,signal,multiprocessing,psutil,subprocess,tarfile,scipy,argparse
-from pytorch3d.transforms import so3_log_map,so3_exp_map,se3_exp_map,se3_log_map,matrix_to_axis_angle,matrix_to_euler_angles,euler_angles_to_matrix, rotation_6d_to_matrix
-from pytorch3d.renderer import FoVPerspectiveCameras, PerspectiveCameras, look_at_view_transform, look_at_rotation, RasterizationSettings, MeshRenderer, MeshRasterizer, BlendParams, SoftSilhouetteShader, HardPhongShader, PointLights, TexturesVertex
-from pytorch3d.renderer.mesh.rasterize_meshes import barycentric_coordinates
-from pytorch3d.renderer.mesh.shader import SoftDepthShader, HardFlatShader
-from pytorch3d.renderer.mesh.textures import Textures
-from pytorch3d.structures import Meshes
+
+# Try to import pytorch3d, but make it optional for ONNX export
+try:
+    from pytorch3d.transforms import so3_log_map,so3_exp_map,se3_exp_map,se3_log_map,matrix_to_axis_angle,matrix_to_euler_angles,euler_angles_to_matrix, rotation_6d_to_matrix
+    from pytorch3d.renderer import FoVPerspectiveCameras, PerspectiveCameras, look_at_view_transform, look_at_rotation, RasterizationSettings, MeshRenderer, MeshRasterizer, BlendParams, SoftSilhouetteShader, HardPhongShader, PointLights, TexturesVertex
+    from pytorch3d.renderer.mesh.rasterize_meshes import barycentric_coordinates
+    from pytorch3d.renderer.mesh.shader import SoftDepthShader, HardFlatShader
+    from pytorch3d.renderer.mesh.textures import Textures
+    PYTORCH3D_AVAILABLE = True
+    from pytorch3d.structures import Meshes
+except ImportError:
+    PYTORCH3D_AVAILABLE = False
+    # Define dummy functions for ONNX export compatibility
+    print("WARNING: pytorch3d not available, some functions will not work")
+    Meshes = None
+
 from scipy.interpolate import griddata
-import nvdiffrast.torch as dr
+try:
+    import nvdiffrast.torch as dr
+except ImportError:
+    print("WARNING: nvdiffrast not available")
+    dr = None
 import torch.nn.functional as F
 import torchvision
 import torch.nn as nn

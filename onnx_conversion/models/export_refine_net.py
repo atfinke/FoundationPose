@@ -28,6 +28,7 @@ class RefineNetONNX(nn.Module):
     ONNX-compatible version of RefineNet.
 
     Replaces pytorch3d operations with pure PyTorch equivalents.
+    Also manually implements TransformerEncoderLayer to avoid fused operations.
     """
 
     def __init__(self, original_model: RefineNet):
@@ -40,11 +41,59 @@ class RefineNetONNX(nn.Module):
         self.encodeA = original_model.encodeA
         self.encodeAB = original_model.encodeAB
         self.pos_embed = original_model.pos_embed
-        self.trans_head = original_model.trans_head
-        self.rot_head = original_model.rot_head
+
+        # Extract transformer components for manual forward
+        self.trans_transformer = original_model.trans_head[0]
+        self.trans_linear = original_model.trans_head[1]
+
+        self.rot_transformer = original_model.rot_head[0]
+        self.rot_linear = original_model.rot_head[1]
 
         # Set to eval mode
         self.eval()
+
+    def _manual_multihead_attention(self, x, mha_layer):
+        """
+        Manual implementation of multi-head attention to avoid fused operation.
+        """
+        batch_size, seq_len, embed_dim = x.shape
+        num_heads = mha_layer.num_heads
+        head_dim = embed_dim // num_heads
+
+        # Linear projections
+        qkv = nn.functional.linear(x, mha_layer.in_proj_weight, mha_layer.in_proj_bias)
+        qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, num_heads, seq_len, head_dim)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Scaled dot-product attention
+        scale = head_dim ** -0.5
+        attn = (q @ k.transpose(-2, -1)) * scale  # (B, num_heads, seq_len, seq_len)
+        attn = torch.softmax(attn, dim=-1)
+
+        # Apply attention to values
+        out = attn @ v  # (B, num_heads, seq_len, head_dim)
+        out = out.transpose(1, 2).contiguous()  # (B, seq_len, num_heads, head_dim)
+        out = out.reshape(batch_size, seq_len, embed_dim)
+
+        # Output projection
+        out = mha_layer.out_proj(out)
+
+        return out
+
+    def _transformer_forward(self, x, transformer_layer):
+        """
+        Manual implementation of TransformerEncoderLayer forward to avoid fused operation.
+        """
+        # Self-attention (manual implementation)
+        attn_output = self._manual_multihead_attention(x, transformer_layer.self_attn)
+        x = transformer_layer.norm1(x + transformer_layer.dropout1(attn_output))
+
+        # Feedforward
+        ff_output = transformer_layer.linear2(transformer_layer.dropout(transformer_layer.activation(transformer_layer.linear1(x))))
+        x = transformer_layer.norm2(x + transformer_layer.dropout2(ff_output))
+
+        return x
 
     def forward(self, A: torch.Tensor, B: torch.Tensor) -> dict:
         """
@@ -76,11 +125,13 @@ class RefineNetONNX(nn.Module):
         # Positional embedding
         ab = self.pos_embed(ab.reshape(bs, ab.shape[1], -1).permute(0, 2, 1))
 
-        # Translation head
-        output['trans'] = self.trans_head(ab).mean(dim=1)
+        # Translation head - manual transformer forward
+        trans_features = self._transformer_forward(ab, self.trans_transformer)
+        output['trans'] = self.trans_linear(trans_features).mean(dim=1)
 
-        # Rotation head
-        rot_output = self.rot_head(ab).mean(dim=1)
+        # Rotation head - manual transformer forward
+        rot_features = self._transformer_forward(ab, self.rot_transformer)
+        rot_output = self.rot_linear(rot_features).mean(dim=1)
         output['rot'] = rot_output
 
         # Convert 6D rotation to matrix if needed (for downstream use)
@@ -126,18 +177,34 @@ def export_refine_net(
     if 'cfg' in checkpoint:
         cfg = checkpoint['cfg']
     else:
-        # Default configuration
-        from omegaconf import OmegaConf
-        cfg = OmegaConf.create({
-            'use_BN': True,
-            'rot_rep': 'axis_angle',  # or '6d'
-            'trans_rep': 'tracknet'
-        })
+        # Try to load config.yml from checkpoint directory
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        config_path = os.path.join(checkpoint_dir, 'config.yml')
+        if os.path.exists(config_path):
+            logging.info(f"Loading config from {config_path}")
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.load(config_path)
+        else:
+            # Default configuration
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.create({
+                'use_BN': True,
+                'rot_rep': 'axis_angle',  # or '6d'
+                'trans_rep': 'tracknet',
+                'c_in': 4,
+                'n_view': 1
+            })
 
     logging.info(f"Model configuration: {cfg}")
 
+    # Get c_in from config or use default
+    c_in = cfg.get('c_in', 4) if isinstance(cfg, dict) else getattr(cfg, 'c_in', 4)
+    n_view = cfg.get('n_view', 1) if isinstance(cfg, dict) else getattr(cfg, 'n_view', 1)
+
+    logging.info(f"Using c_in={c_in}, n_view={n_view}")
+
     # Create original model
-    original_model = RefineNet(cfg=cfg, c_in=4, n_view=1)
+    original_model = RefineNet(cfg=cfg, c_in=c_in, n_view=n_view)
 
     # Load weights
     original_model.load_state_dict(state_dict, strict=False)
@@ -149,8 +216,8 @@ def export_refine_net(
 
     # Create dummy inputs
     H, W = input_size
-    dummy_A = torch.randn(batch_size, 4, H, W)
-    dummy_B = torch.randn(batch_size, 4, H, W)
+    dummy_A = torch.randn(batch_size, c_in, H, W)
+    dummy_B = torch.randn(batch_size, c_in, H, W)
 
     # Define input names
     input_names = ['rendered_image', 'observed_image']
@@ -190,7 +257,8 @@ def export_refine_net(
             opset_version=opset_version,
             do_constant_folding=True,
             export_params=True,
-            verbose=False
+            verbose=False,
+            dynamo=False  # Use legacy exporter for compatibility
         )
 
     logging.info(f"ONNX model saved to {output_path}")

@@ -26,7 +26,7 @@ class ScoreNetONNX(nn.Module):
     """
     ONNX-compatible version of ScoreNetMultiPair.
 
-    No modifications needed as ScoreNet already uses standard PyTorch ops.
+    Manually implements multi-head attention to avoid fused operations.
     """
 
     def __init__(self, original_model: ScoreNetMultiPair):
@@ -45,6 +45,43 @@ class ScoreNetONNX(nn.Module):
 
         # Set to eval mode
         self.eval()
+
+    def _manual_multihead_attention(self, q_input, k_input, v_input, mha_layer):
+        """
+        Manual implementation of multi-head attention to avoid fused operation.
+        """
+        batch_size, seq_len, embed_dim = q_input.shape
+        num_heads = mha_layer.num_heads
+        head_dim = embed_dim // num_heads
+
+        # Linear projections for Q, K, V
+        if q_input is k_input and k_input is v_input:
+            # Self-attention: use combined QKV projection
+            qkv = nn.functional.linear(q_input, mha_layer.in_proj_weight, mha_layer.in_proj_bias)
+            qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
+            qkv = qkv.permute(2, 0, 3, 1, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]
+        else:
+            # Cross-attention: separate projections
+            w_q, w_k, w_v = mha_layer.in_proj_weight.split(embed_dim)
+            b_q, b_k, b_v = mha_layer.in_proj_bias.split(embed_dim)
+            q = nn.functional.linear(q_input, w_q, b_q).reshape(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+            k = nn.functional.linear(k_input, w_k, b_k).reshape(batch_size, k_input.shape[1], num_heads, head_dim).transpose(1, 2)
+            v = nn.functional.linear(v_input, w_v, b_v).reshape(batch_size, v_input.shape[1], num_heads, head_dim).transpose(1, 2)
+
+        # Scaled dot-product attention
+        scale = head_dim ** -0.5
+        attn = (q @ k.transpose(-2, -1)) * scale
+        attn = torch.softmax(attn, dim=-1)
+
+        # Apply attention to values
+        out = attn @ v
+        out = out.transpose(1, 2).contiguous().reshape(batch_size, seq_len, embed_dim)
+
+        # Output projection
+        out = mha_layer.out_proj(out)
+
+        return out
 
     def forward(self, A: torch.Tensor, B: torch.Tensor, L: int) -> dict:
         """
@@ -72,13 +109,15 @@ class ScoreNetONNX(nn.Module):
         ab = self.encoderAB(ab)
 
         ab = self.pos_embed(ab.reshape(bs*L, ab.shape[1], -1).permute(0, 2, 1))
-        ab, _ = self.att(ab, ab, ab)
+
+        # Manual self-attention instead of fused operation
+        ab = self._manual_multihead_attention(ab, ab, ab, self.att)
 
         feats = ab.mean(dim=1).reshape(bs*L, -1)
 
         # Cross-attention between pairs
         x = feats.reshape(bs, L, -1)
-        x, _ = self.att_cross(x, x, x)
+        x = self._manual_multihead_attention(x, x, x, self.att_cross)
 
         # Score prediction
         output['score_logit'] = self.linear(x).reshape(bs, L)
@@ -126,16 +165,32 @@ def export_score_net(
     if 'cfg' in checkpoint:
         cfg = checkpoint['cfg']
     else:
-        # Default configuration
-        from omegaconf import OmegaConf
-        cfg = OmegaConf.create({
-            'use_BN': True
-        })
+        # Try to load config.yml from checkpoint directory
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        config_path = os.path.join(checkpoint_dir, 'config.yml')
+        if os.path.exists(config_path):
+            logging.info(f"Loading config from {config_path}")
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.load(config_path)
+        else:
+            # Default configuration
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.create({
+                'use_BN': True,
+                'c_in': 4,
+                'n_view': 1
+            })
 
     logging.info(f"Model configuration: {cfg}")
 
+    # Get c_in from config or use default
+    c_in = cfg.get('c_in', 4) if isinstance(cfg, dict) else getattr(cfg, 'c_in', 4)
+    n_view = cfg.get('n_view', 1) if isinstance(cfg, dict) else getattr(cfg, 'n_view', 1)
+
+    logging.info(f"Using c_in={c_in}, n_view={n_view}")
+
     # Create original model
-    original_model = ScoreNetMultiPair(cfg=cfg, c_in=4)
+    original_model = ScoreNetMultiPair(cfg=cfg, c_in=c_in)
 
     # Load weights
     original_model.load_state_dict(state_dict, strict=False)
@@ -148,8 +203,8 @@ def export_score_net(
     # Create dummy inputs
     H, W = input_size
     total_batch = batch_size * num_pairs
-    dummy_A = torch.randn(total_batch, 4, H, W)
-    dummy_B = torch.randn(total_batch, 4, H, W)
+    dummy_A = torch.randn(total_batch, c_in, H, W)
+    dummy_B = torch.randn(total_batch, c_in, H, W)
     dummy_L = torch.tensor(num_pairs, dtype=torch.long)
 
     # NOTE: ONNX export doesn't support integer scalar inputs well
@@ -205,7 +260,8 @@ def export_score_net(
             opset_version=opset_version,
             do_constant_folding=True,
             export_params=True,
-            verbose=False
+            verbose=False,
+            dynamo=False  # Use legacy exporter for compatibility
         )
 
     logging.info(f"ONNX model saved to {output_path}")
