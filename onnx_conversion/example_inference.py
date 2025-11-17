@@ -54,7 +54,7 @@ def example_refine_net():
     print(f"  Rotation delta: shape={rotation_delta.shape}")
     print(f"    Sample values: {rotation_delta[0]}")
 
-    print("\n✅ RefineNet inference completed successfully")
+    print("\nRefineNet inference completed successfully")
 
 
 def example_score_net():
@@ -108,7 +108,7 @@ def example_score_net():
     print(f"    Sample values: {score_logits[0]}")
     print(f"    Best pose index: {np.argmax(score_logits[0])}")
 
-    print("\n✅ ScoreNet inference completed successfully")
+    print("\nScoreNet inference completed successfully")
 
 
 def example_with_onnx_ops():
@@ -167,7 +167,7 @@ def example_with_onnx_ops():
     print(f"  bilateral_filter: (480,640) → (480,640)")
     print(f"    Output range: [{filtered.min():.2f}, {filtered.max():.2f}]")
 
-    print("\n✅ ONNX operators working correctly")
+    print("\nONNX operators working correctly")
 
 
 def main():

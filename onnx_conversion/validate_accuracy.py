@@ -4,7 +4,7 @@
 """
 Accuracy validation script for ONNX models.
 
-Compares PyTorch and ONNX model outputs to prove <1e-4 error tolerance.
+Compares PyTorch and ONNX model outputs to verify numerical equivalence.
 """
 
 import os
@@ -107,9 +107,9 @@ def validate_refine_net(pytorch_model, onnx_session, num_samples: int = 100, tol
     passed = (trans_max < tolerance) and (rot_max < tolerance)
 
     if passed:
-        print(f"✅ PASS: All errors < {tolerance}")
+        print(f"PASS: All errors < {tolerance}")
     else:
-        print(f"❌ FAIL: Errors exceed {tolerance}")
+        print(f"FAIL: Errors exceed {tolerance}")
         print(f"  Translation max error: {trans_max}")
         print(f"  Rotation max error: {rot_max}")
 
@@ -159,9 +159,9 @@ def validate_score_net(pytorch_model, onnx_session, num_samples: int = 100, num_
     passed = score_max < tolerance
 
     if passed:
-        print(f"✅ PASS: All errors < {tolerance}")
+        print(f"PASS: All errors < {tolerance}")
     else:
-        print(f"❌ FAIL: Errors exceed {tolerance}")
+        print(f"FAIL: Errors exceed {tolerance}")
         print(f"  Score max error: {score_max}")
 
     return passed, {
@@ -233,10 +233,10 @@ def main():
     print("="*60)
 
     if passed:
-        print("✅ VALIDATION PASSED")
+        print("Result: VALIDATION PASSED")
         return 0
     else:
-        print("❌ VALIDATION FAILED")
+        print("Result: VALIDATION FAILED")
         return 1
 
 

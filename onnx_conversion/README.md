@@ -26,9 +26,11 @@ python qnn_conversion/onnx_to_qnn.py \
     --quantization int8
 ```
 
-## What's Implemented
+## Implementation Overview
 
-### ✅ CUDA Operator Re-implementations (Pure PyTorch)
+### CUDA Operator Re-implementations
+
+All custom CUDA operators have been re-implemented using pure PyTorch operations compatible with ONNX export:
 
 | Original Operator | Source | ONNX Implementation |
 |-------------------|--------|---------------------|
@@ -45,20 +47,20 @@ python qnn_conversion/onnx_to_qnn.py \
 | `HashGridEncoder` (NGP) | bundlesdf/mycuda | `onnx_ops/grid_encoder.py` |
 | Mesh rasterization | nvdiffrast | `onnx_ops/rendering.py` |
 
-**All operators:**
+**Operator Characteristics:**
 - Use ONNX opset 17 standard operations only
 - Support dynamic batch sizes
 - Maintain numerical accuracy (error < 1e-4)
 
-### ✅ Model Export Scripts
+### Model Export Scripts
 
 - **RefineNet**: Pose refinement network (translation + rotation deltas)
 - **ScoreNet**: Pose scoring network (multi-pair ranking)
 - Both support dynamic batching and preserve >99.99% accuracy
 
-### ✅ QNN Conversion Pipeline
+### QNN Conversion Pipeline
 
-- ONNX → QNN C++ → Shared Library → Context Binary
+- ONNX to QNN C++ to Shared Library to Context Binary
 - INT8/FP16 quantization with per-channel support
 - Hexagon DSP backend for 20-28x CPU speedup
 
@@ -75,10 +77,10 @@ python validate_accuracy.py \
 
 **Expected Results:**
 ```
-✓ Testing 100 random samples...
+Testing 100 random samples...
   Translation: max_error=3.2e-5, mean_error=8.1e-6
   Rotation: max_error=4.7e-5, mean_error=1.2e-5
-✅ PASS: All errors < 1e-4
+PASS: All errors < 1e-4
 ```
 
 ## Performance
@@ -87,16 +89,16 @@ python validate_accuracy.py \
 
 | Model | PyTorch CUDA | ONNX CPU | QNN INT8 Hexagon | Speedup |
 |-------|--------------|----------|------------------|---------|
-| RefineNet | 15ms | 180ms | **8ms** | **22.5x** |
-| ScoreNet | 12ms | 150ms | **6ms** | **25x** |
+| RefineNet | 15ms | 180ms | 8ms | 22.5x |
+| ScoreNet | 12ms | 150ms | 6ms | 25x |
 
 ### Accuracy Retention
 
 | Quantization | Max Error | Mean Error | Status |
 |--------------|-----------|------------|--------|
-| FP32 (ONNX) | <1e-4 | <1e-5 | ✅ |
-| FP16 (QNN) | <1e-3 | <1e-4 | ✅ |
-| INT8 (QNN) | <1% | <0.5% | ✅ |
+| FP32 (ONNX) | <1e-4 | <1e-5 | Pass |
+| FP16 (QNN) | <1e-3 | <1e-4 | Pass |
+| INT8 (QNN) | <1% | <0.5% | Pass |
 
 ## Directory Structure
 

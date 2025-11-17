@@ -49,7 +49,7 @@ def test_geometric_ops():
     weight_sum = weights.sum(dim=-1)
     assert (weight_sum - 1.0).abs().max() < 1e-5, "Barycentric weights don't sum to 1"
 
-    print("  ✓ All geometric operations passed")
+    print("  All geometric operations passed")
 
 
 def test_depth_ops():
@@ -71,7 +71,7 @@ def test_depth_ops():
     eroded_batch = depth_erosion_onnx(depth_batch, radius=2)
     assert eroded_batch.shape == (2, 480, 640), f"Expected (2,480,640), got {eroded_batch.shape}"
 
-    print("  ✓ All depth operations passed")
+    print("  All depth operations passed")
 
 
 def test_pose_ops():
@@ -99,7 +99,7 @@ def test_pose_ops():
     assert centers.shape[1:] == (4, 4), f"Expected (K,4,4), got {centers.shape}"
     assert labels.shape == (10,), f"Expected (10,), got {labels.shape}"
 
-    print("  ✓ All pose operations passed")
+    print("  All pose operations passed")
 
 
 def test_ray_tracing_ops():
@@ -123,7 +123,7 @@ def test_ray_tracing_ops():
     t_near, t_far = ray_aabb_intersection_onnx(ray_origins, ray_directions, aabb_min, aabb_max)
     assert t_near.shape == (10,), f"Expected (10,), got {t_near.shape}"
 
-    print("  ✓ All ray tracing operations passed")
+    print("  All ray tracing operations passed")
 
 
 def main():
@@ -138,7 +138,7 @@ def main():
     test_ray_tracing_ops()
 
     print("\n" + "="*60)
-    print("✅ ALL TESTS PASSED")
+    print("ALL TESTS PASSED")
     print("="*60)
 
 
