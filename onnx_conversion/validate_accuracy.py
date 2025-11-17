@@ -32,18 +32,34 @@ def load_pytorch_model(checkpoint_path: str, model_type: str = 'refine'):
     if 'cfg' in checkpoint:
         cfg = checkpoint['cfg']
     else:
-        from omegaconf import OmegaConf
-        cfg = OmegaConf.create({
-            'use_BN': True,
-            'rot_rep': 'axis_angle',
-            'trans_rep': 'tracknet'
-        })
+        # Try to load config.yml from checkpoint directory
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        config_path = os.path.join(checkpoint_dir, 'config.yml')
+        if os.path.exists(config_path):
+            print(f"Loading config from {config_path}")
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.load(config_path)
+        else:
+            from omegaconf import OmegaConf
+            cfg = OmegaConf.create({
+                'use_BN': True,
+                'rot_rep': 'axis_angle',
+                'trans_rep': 'tracknet',
+                'c_in': 4,
+                'n_view': 1
+            })
+
+    # Get c_in from config
+    c_in = cfg.get('c_in', 4) if isinstance(cfg, dict) else getattr(cfg, 'c_in', 4)
+    n_view = cfg.get('n_view', 1) if isinstance(cfg, dict) else getattr(cfg, 'n_view', 1)
+
+    print(f"Using c_in={c_in}, n_view={n_view}")
 
     # Create model
     if model_type == 'refine':
-        model = RefineNet(cfg=cfg, c_in=4, n_view=1)
+        model = RefineNet(cfg=cfg, c_in=c_in, n_view=n_view)
     elif model_type == 'score':
-        model = ScoreNetMultiPair(cfg=cfg, c_in=4)
+        model = ScoreNetMultiPair(cfg=cfg, c_in=c_in)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -58,10 +74,10 @@ def load_pytorch_model(checkpoint_path: str, model_type: str = 'refine'):
     model.load_state_dict(state_dict, strict=False)
     model.eval()
 
-    return model, cfg
+    return model, cfg, c_in
 
 
-def validate_refine_net(pytorch_model, onnx_session, num_samples: int = 100, tolerance: float = 1e-4):
+def validate_refine_net(pytorch_model, onnx_session, c_in: int = 6, num_samples: int = 100, tolerance: float = 1e-4):
     """Validate RefineNet accuracy."""
     print(f"\nValidating RefineNet with {num_samples} samples...")
 
@@ -70,8 +86,8 @@ def validate_refine_net(pytorch_model, onnx_session, num_samples: int = 100, tol
 
     for i in range(num_samples):
         # Random inputs
-        A = torch.randn(1, 4, 160, 160)
-        B = torch.randn(1, 4, 160, 160)
+        A = torch.randn(1, c_in, 160, 160)
+        B = torch.randn(1, c_in, 160, 160)
 
         # PyTorch inference
         with torch.no_grad():
@@ -121,7 +137,7 @@ def validate_refine_net(pytorch_model, onnx_session, num_samples: int = 100, tol
     }
 
 
-def validate_score_net(pytorch_model, onnx_session, num_samples: int = 100, num_pairs: int = 8, tolerance: float = 1e-4):
+def validate_score_net(pytorch_model, onnx_session, c_in: int = 6, num_samples: int = 100, num_pairs: int = 8, tolerance: float = 1e-4):
     """Validate ScoreNet accuracy."""
     print(f"\nValidating ScoreNet with {num_samples} samples...")
 
@@ -130,8 +146,8 @@ def validate_score_net(pytorch_model, onnx_session, num_samples: int = 100, num_
     for i in range(num_samples):
         # Random inputs
         total_batch = num_pairs
-        A = torch.randn(total_batch, 4, 160, 160)
-        B = torch.randn(total_batch, 4, 160, 160)
+        A = torch.randn(total_batch, c_in, 160, 160)
+        B = torch.randn(total_batch, c_in, 160, 160)
 
         # PyTorch inference
         with torch.no_grad():
@@ -202,7 +218,7 @@ def main():
     print("="*60)
 
     # Load models
-    pytorch_model, cfg = load_pytorch_model(args.pytorch_checkpoint, args.model_type)
+    pytorch_model, cfg, c_in = load_pytorch_model(args.pytorch_checkpoint, args.model_type)
 
     print(f"Loading ONNX model from {args.onnx_model}...")
     onnx_session = ort.InferenceSession(args.onnx_model)
@@ -212,6 +228,7 @@ def main():
         passed, stats = validate_refine_net(
             pytorch_model,
             onnx_session,
+            c_in,
             args.num_samples,
             args.tolerance
         )
@@ -219,6 +236,7 @@ def main():
         passed, stats = validate_score_net(
             pytorch_model,
             onnx_session,
+            c_in,
             args.num_samples,
             args.num_pairs,
             args.tolerance

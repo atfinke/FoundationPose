@@ -49,34 +49,36 @@ class ScoreNetONNX(nn.Module):
     def _manual_multihead_attention(self, q_input, k_input, v_input, mha_layer):
         """
         Manual implementation of multi-head attention to avoid fused operation.
+        Always uses combined QKV projection for self-attention (ScoreNet only uses self-attention).
         """
         batch_size, seq_len, embed_dim = q_input.shape
         num_heads = mha_layer.num_heads
         head_dim = embed_dim // num_heads
 
-        # Linear projections for Q, K, V
-        if q_input is k_input and k_input is v_input:
-            # Self-attention: use combined QKV projection
-            qkv = nn.functional.linear(q_input, mha_layer.in_proj_weight, mha_layer.in_proj_bias)
-            qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
-            qkv = qkv.permute(2, 0, 3, 1, 4)
-            q, k, v = qkv[0], qkv[1], qkv[2]
-        else:
-            # Cross-attention: separate projections
-            w_q, w_k, w_v = mha_layer.in_proj_weight.split(embed_dim)
-            b_q, b_k, b_v = mha_layer.in_proj_bias.split(embed_dim)
-            q = nn.functional.linear(q_input, w_q, b_q).reshape(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
-            k = nn.functional.linear(k_input, w_k, b_k).reshape(batch_size, k_input.shape[1], num_heads, head_dim).transpose(1, 2)
-            v = nn.functional.linear(v_input, w_v, b_v).reshape(batch_size, v_input.shape[1], num_heads, head_dim).transpose(1, 2)
+        # Self-attention: use combined QKV projection
+        # in_proj_weight shape: (3 * embed_dim, embed_dim)
+        # in_proj_bias shape: (3 * embed_dim,)
+        qkv = nn.functional.linear(q_input, mha_layer.in_proj_weight, mha_layer.in_proj_bias)
+        # qkv shape: (batch_size, seq_len, 3 * embed_dim)
+
+        qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
+        # qkv shape: (batch_size, seq_len, 3, num_heads, head_dim)
+
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        # qkv shape: (3, batch_size, num_heads, seq_len, head_dim)
+
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        # Each has shape: (batch_size, num_heads, seq_len, head_dim)
 
         # Scaled dot-product attention
         scale = head_dim ** -0.5
-        attn = (q @ k.transpose(-2, -1)) * scale
+        attn = (q @ k.transpose(-2, -1)) * scale  # (batch_size, num_heads, seq_len, seq_len)
         attn = torch.softmax(attn, dim=-1)
 
         # Apply attention to values
-        out = attn @ v
-        out = out.transpose(1, 2).contiguous().reshape(batch_size, seq_len, embed_dim)
+        out = attn @ v  # (batch_size, num_heads, seq_len, head_dim)
+        out = out.transpose(1, 2).contiguous()  # (batch_size, seq_len, num_heads, head_dim)
+        out = out.reshape(batch_size, seq_len, embed_dim)  # (batch_size, seq_len, embed_dim)
 
         # Output projection
         out = mha_layer.out_proj(out)
