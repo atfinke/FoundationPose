@@ -47,7 +47,7 @@ def geodesic_distance_onnx(R1: torch.Tensor, R2: torch.Tensor) -> torch.Tensor:
     # Geodesic distance: arccos((trace - 1) / 2)
     # Clamp to avoid numerical issues with arccos
     cos_angle = (trace - 1.0) / 2.0
-    cos_angle = torch.clamp(cos_angle, -1.0 + 1e-6, 1.0 - 1e-6)
+    cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
     distance = torch.acos(cos_angle)  # (B,)
 
     return distance

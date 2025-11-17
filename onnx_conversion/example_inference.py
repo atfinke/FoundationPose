@@ -147,7 +147,7 @@ def example_with_onnx_ops():
 
     # Transform points
     points = torch.randn(100, 3)
-    transform = torch.eye(4).unsqueeze(0).expand(2, 4, 4)
+    transform = torch.eye(4).unsqueeze(0).expand(2, 4, 4).clone()
     transform[:, :3, 3] = torch.randn(2, 3)  # Random translation
     transformed = transform_pts_onnx(points, transform)
     print(f"  transform_pts: (100,3) with (2,4,4) → (2,100,3)")
@@ -177,14 +177,17 @@ def main():
     # Example 1: RefineNet
     try:
         example_refine_net()
-    except FileNotFoundError:
-        print("\nNote: RefineNet ONNX model not found.")
-        print("  Run: python models/export_refine_net.py ...")
+    except Exception as e:
+        if "doesn't exist" in str(e) or "FileNotFoundError" in str(type(e)):
+            print("\nNote: RefineNet ONNX model not found.")
+            print("  Run: python models/export_refine_net.py ...")
+        else:
+            print(f"\nNote: Could not load RefineNet model: {e}")
 
     # Example 2: ScoreNet
     try:
         example_score_net()
-    except FileNotFoundError:
+    except Exception:
         pass  # Already handled in function
 
     # Example 3: Direct operator usage
